@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "moduleResolution": "node",
+        "noEmitOnError": true,
+        "noImplicitAny": true,
+        "skipLibCheck": true,
+        "outFile": "dist/1.17/bundle.js",
+        "target": "ES2020",
+        "noFallthroughCasesInSwitch": true,
+        "allowJs": false,
+        "allowSyntheticDefaultImports": false,
+        "strict": true,
+        "declaration": true,
+        "rootDir": "src",
+        "module": "AMD"
+    },
+    "exclude": [
+        "node_modules",
+        "dist"
+    ]
+}

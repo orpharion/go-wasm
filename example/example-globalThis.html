@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+
+<script src="scripts/require.js"></script>
+<script src="../dist/1.17/bundle.js"></script>
+
+<script>
+    // Since we are using require to load, create a new partial global without require, as
+    // it differs from the NodeJS.require that this uses.
+    let go
+
+    require([
+        "scripts/browserfs",
+        "1.17/new",
+        "1.17/fs/browserfs",
+        "1.17/process"
+    ], (BFS, New, BFSgo, proc) => {
+        bfs = BFS
+        BFS.install(globalThis)
+        BFS.configure({
+            fs: "LocalStorage"
+        }, function (e) {
+            if (e) {
+                throw e;
+            }
+            globalThis.fs = new BFSgo.FS(globalThis.require('fs'), globalThis)
+        });
+        globalThis.process = new proc.default(globalThis);
+        [_, go] = New.default()
+        WebAssembly.instantiateStreaming(fetch("scripts/cue.wasm"), go.importObject).then((result) => {
+            mod = result.module;
+            inst = result.instance;
+            document.getElementById("runButton").disabled = false;
+        }).catch((err) => {
+            console.error(err);
+        });
+    })
+
+    async function run() {
+        console.clear();
+        go.argv = ["cue eval"]
+        await go.run(inst);
+        inst = await WebAssembly.instantiate(mod, go.importObject); // reset instance
+    }
+</script>
+
+<button onClick="run();" id="runButton" disabled>Run</button>
+</body>
+</html>

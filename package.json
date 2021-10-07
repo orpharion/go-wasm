@@ -1,0 +1,15 @@
+{
+  "name": "go-wasm",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "Alex de Oliveira <orpharion@orpharion.net>",
+  "license": "MIT",
+  "dependencies": {
+    "browserfs": "https://github.com/jvilk/BrowserFS.git",
+    "typescript": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tsconfig/recommended": "^1.0.1",
+    "@types/node": "^16.10.3"
+  }
+}

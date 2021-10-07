@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+
+<script src="scripts/require.js"></script>
+<script src="../dist/1.17/bundle.js"></script>
+
+<script>
+    // Since we are using require to load, create a new partial global without require, as
+    // it differs from the NodeJS.require that this uses.
+    let go, goGlobal
+
+    require([
+        "scripts/browserfs",
+        "1.17/global",
+        "1.17/fs/browserfs",
+        "1.17/process",
+        "1.17/go"
+    ], (BFS, Glb, BFSgo, Proc, Go) => {
+        goGlobal = {
+            TextEncoder: TextEncoder,
+            TextDecoder: TextDecoder,
+            crypto: globalThis.crypto,
+        }
+        BFS.install(goGlobal)
+        BFS.configure({
+            fs: "LocalStorage"
+        }, function (e) {
+            if (e) {
+                throw e;
+            }
+            goGlobal.fs = new BFSgo.FS(goGlobal.require('fs'), goGlobal)
+            // override the browserfs require
+            goGlobal.require = undefined
+            // override the browserfs process - by default, this polyfill flushes to console
+            goGlobal.process = new Proc.default(goGlobal);
+            goGlobal = Glb.transfer(globalThis, goGlobal)
+            go = new Go.default(goGlobal)
+            WebAssembly.instantiateStreaming(fetch("scripts/cue.wasm"), go.importObject).then((result) => {
+                mod = result.module;
+                inst = result.instance;
+                document.getElementById("runButton").disabled = false;
+            }).catch((err) => {
+                console.error(err);
+            });
+        });
+
+    })
+
+    async function run() {
+        console.clear();
+        go.argv = ["cue eval"]
+        await go.run(inst);
+        inst = await WebAssembly.instantiate(mod, go.importObject); // reset instance
+    }
+</script>
+
+<button onClick="run();" id="runButton" disabled>Run</button>
+</body>
+</html>
