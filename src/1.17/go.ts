@@ -2,8 +2,6 @@ import {uint32} from "./types"
 import {IInstance} from "./webAssembly/instance"
 import {Values} from './values'
 import {default as newImportObject, IImportObjectGo} from './webAssembly/importObjectGo'
-import {ITextDecoder, ITextEncoder} from './encoding'
-import {IFS} from "./fs";
 import {IGlobal} from "./global";
 
 /**
@@ -74,7 +72,10 @@ export interface IGo {
     argv: string[]
 
     run(inst: IInstance): Promise<void>
+
+    importObject: { go: IImportObjectGo }
 }
+
 /**
  * Multiple instances of this class can exist, each corresponding (roughly)
  * to an isolated process.
