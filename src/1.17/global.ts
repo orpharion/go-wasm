@@ -1,6 +1,6 @@
 import {IRequire, must, wrap} from './require'
-import FFS, {IFS} from './fs'
-import FProcess, {IProcess} from './process';
+import {FileSystem, IFileSystem} from './fs'
+import {IProcess, IProcessIn, Process} from './process';
 import {ICrypto, require_ as requireCrypto} from './crypto';
 import {IConsole} from './console'
 import FPerformance, {IPerformance} from './performance'
@@ -12,39 +12,23 @@ import {
     requireTextDecoderConstructor,
     requireTextEncoderConstructor
 } from "./encoding";
+import installGo, {Go, IGo} from "./go";
+import {xhrIsAvailable} from "browserfs/dist/node/generic/xhr";
 
-export interface IGlobal {
-    // Required by Go -------------------------------------------------------------------------------------------------
-
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L19
-     */
-    process: IProcess
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L20
-     */
-    fs: IFS
+/**
+ * Required, but no polyfill provided.
+ */
+export interface IGlobalCore {
+    // Required by Go --------------------------------------------------------------------------------------------------
     /**
      * See https://github.com/golang/go/blob/go1.17/src/syscall/js/js.go#L99
      */
     Object: typeof Object
     Array: typeof Array
     /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/js/js.go#L99
+     * See https://github.com/golang/go/blob/ec5170397c724a8ae440b2bc529f857c86f0e6b1/src/syscall/js/js.go#L580
      */
-    Uint8Array: typeof Uint8Array
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/crypto/rand/rand_js.go#L16
-     */
-    crypto: ICrypto
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/net/http/roundtrip_js.go#L44
-     */
-    fetch?: typeof fetch
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/net/http/roundtrip_js.go#L52
-     */
-    AbortController?: typeof AbortController
+    Uint8Array: typeof Uint8Array // todo also Uint8ClampedArray
     /**
      * See https://github.com/golang/go/blob/go1.17/src/net/http/roundtrip_js.go#L80
      */
@@ -57,49 +41,72 @@ export interface IGlobal {
      * See https://github.com/golang/go/blob/go1.17/src/syscall/js/func.go#L86
      */
     console: IConsole
+    // Required by wasm_exec.js ----------------------------------------------------------------------------------------
+    TextEncoder: ITextEncoderConstructor
+    TextDecoder: ITextDecoderConstructor
+}
 
-    // Required by js -------------------------------------------------------------------------------------------------
+/**
+ * Required and polyfillable.
+ */
+interface IGlobalPoly {
+    // Required by Go --------------------------------------------------------------------------------------------------
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L19
+     */
+    process: IProcessIn | IProcess
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L20
+     */
+    fs: IFileSystem
+    /**
+     * Only polyfillable in node environments, but browsers supply their own.
+     * See https://github.com/golang/go/blob/go1.17/src/crypto/rand/rand_js.go#L16
+     */
+    crypto: ICrypto
+    // Required by wasm_exec.js ----------------------------------------------------------------------------------------
+    performance: IPerformance
+    /** Can be instantiated from TextEncoder, TextDecoder */
+    textDecoder: ITextDecoder
+    textEncoder: ITextEncoder
+}
 
+interface IGlobalOptional {
+    // Optional for Go --------------------------------------------------------------------------------------------------
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/net/http/roundtrip_js.go#L44
+     */
+    fetch: typeof fetch
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/net/http/roundtrip_js.go#L52
+     */
+    AbortController: typeof AbortController
+    // Optional for wasm_exec.js ----------------------------------------------------------------------------------------
     /**
      * See https://github.com/golang/go/blob/go1.17/misc/wasm/wasm_exec.js#L30
      * Doesn't seem to be used by go internally, or beyond providing polyfills.
      */
-    require?: IRequire
-    TextEncoder: ITextEncoderConstructor
-    TextDecoder: ITextDecoderConstructor
-    textDecoder: ITextDecoder
-    textEncoder: ITextEncoder
-    performance: IPerformance
+    require: IRequire
+
 }
 
-export interface IGlobalPartial {
-    // Required - no polyfill
-    Object: typeof Object
-    Array: typeof Array
-    Uint8Array: typeof Uint8Array
-    Headers: typeof Headers
-    Date: typeof Date
-    console: IConsole
-    crypto: ICrypto
-    // Polyfillable
-    process?: IProcess
-    fs?: IFS
-
-    // Optional
-    fetch?: typeof fetch
-    AbortController?: typeof AbortController
-    require?: IRequire
-    TextEncoder?: ITextEncoderConstructor
-    TextDecoder?: ITextDecoderConstructor
-    textEncoder?: ITextEncoder
-    textDecoder?: ITextDecoder
-    performance?: IPerformance
+export interface IGlobalIn extends IGlobalCore, IGlobalPoly, Partial<IGlobalOptional> {
+    process: IProcessIn
 }
 
+export interface IGlobalRequired extends IGlobalCore, IGlobalPoly, Partial<IGlobalOptional> {
+    process: IProcess
+}
 
-// TODO INTEGRATE FS AND PROCESS
+export interface IGlobalInPartial extends IGlobalCore, Partial<IGlobalPoly>, Partial<IGlobalOptional> {
+    process: IProcessIn
+}
 
-export default class Global implements IGlobal {
+export interface IGlobalOut extends IGlobalRequired {
+    go: IGo
+}
+
+export class Global<G extends IGlobalInPartial> implements IGlobalOut {
     // Required, no polyfill
     Object: typeof Object = Object
     Array: typeof Array = Array
@@ -107,7 +114,6 @@ export default class Global implements IGlobal {
     Headers: typeof Headers = Headers
     Date: typeof Date = Date
     console: IConsole = console
-
     // Optional, no polyfill
     require?: IRequire
     TextEncoder: ITextEncoderConstructor
@@ -115,19 +121,21 @@ export default class Global implements IGlobal {
 
     // Required, Polyfillable / Requireable
     process: IProcess
-    fs: IFS
+    fs: IFileSystem
     crypto: ICrypto
     performance: IPerformance
 
     textEncoder: ITextEncoder
     textDecoder: ITextDecoder
 
+    go: IGo
+
     /**
      * Returns a new Global-like taking required properties from the reference Global-like
      * @param from: reference Global-like
      */
-    constructor(from: IGlobalPartial) {
-        const fill = transfer(from, this)
+    constructor(from: G) {
+        const fill = transfer(from as IGlobalInPartial, this)
         // this below is mostly to make typescript happy.
         this.TextDecoder = fill.TextDecoder
         this.TextEncoder = fill.TextEncoder
@@ -137,6 +145,7 @@ export default class Global implements IGlobal {
         this.process = fill.process
         this.crypto = fill.crypto
         this.performance = fill.performance
+        this.go = new Go(this)
     }
 }
 
@@ -144,8 +153,8 @@ export default class Global implements IGlobal {
  * Fill an existing partial Global-like with the required properties, mutating in place.
  * @param partial: partial Global-like
  */
-export function fill(partial: IGlobalPartial): IGlobal {
-    return transfer(partial, partial as IGlobal)
+export function fill<G extends IGlobalInPartial>(partial: G): G & IGlobalOut {
+    return prepare(partial, partial as G & IGlobalOut)
 }
 
 /**
@@ -155,33 +164,49 @@ export function fill(partial: IGlobalPartial): IGlobal {
  * @param onto:
  * @private
  */
-export function transfer(partial: IGlobalPartial, onto: IGlobal): IGlobal {
-    if (!onto.Object) onto.Object = partial.Object
-    if (!onto.Array) onto.Array = partial.Array
-    if (!onto.Uint8Array) onto.Uint8Array = partial.Uint8Array
-    if (!onto.Headers) onto.Headers = partial.Headers
-    if (!onto.Date) onto.Date = partial.Date
-    if (!onto.console) onto.console = partial.console
+export function prepare<G extends IGlobalInPartial, N>(partial: G, onto: N ): N & IGlobalRequired {
+    const from = onto as N & IGlobalInPartial
+    const onto_ = onto as N & IGlobalOut
+    if (!from.Object) onto_.Object = partial.Object
+    if (!from.Array) onto_.Array = partial.Array
+    if (!from.Uint8Array) onto_.Uint8Array = partial.Uint8Array
+    if (!from.Headers) onto_.Headers = partial.Headers
+    if (!from.Date) onto_.Date = partial.Date
+    if (!from.console) onto_.console = partial.console
     // only required and Requireable.
-    if (!onto.TextEncoder) {
-        onto.TextEncoder = must<ITextEncoderConstructor>(
+    if (!from.TextEncoder) {
+        onto_.TextEncoder = must<ITextEncoderConstructor>(
             "TextEncoder",
             partial.TextEncoder,
             undefined,
             () => requireTextEncoderConstructor(partial.require))
     }
-    if (!onto.TextDecoder) {
-        onto.TextDecoder = must<ITextDecoderConstructor>(
+    if (!from.TextDecoder) {
+        onto_.TextDecoder = must<ITextDecoderConstructor>(
             "TextDecoder",
             partial.TextDecoder,
             undefined,
             () => requireTextDecoderConstructor(partial.require))
     }
-    if (!onto.textDecoder) onto.textDecoder = must<ITextDecoder>("textDecoder", partial.textDecoder, () => new onto.TextDecoder('utf-8'))
-    if (!onto.textEncoder) onto.textEncoder = must<ITextEncoder>("textEncoder", partial.textEncoder, () => new onto.TextEncoder())
-    if (!onto.fs) onto.fs = must<IFS>("fs", partial.fs, () => new FFS(onto), wrap("fs", partial.require))
-    if (!onto.process) onto.process = must<IProcess>("process", partial.process, () => new FProcess(onto, true))
-    if (!onto.crypto) onto.crypto = must<ICrypto>("crypto", partial.crypto, undefined, () => requireCrypto(partial.require))
-    if (!onto.performance) onto.performance = must<IPerformance>("performance", partial.performance, () => new FPerformance(onto))
-    return onto
+    if (!from.textDecoder) onto_.textDecoder = must<ITextDecoder>("textDecoder", partial.textDecoder, () => new onto_.TextDecoder('utf-8'))
+    if (!from.textEncoder) onto_.textEncoder = must<ITextEncoder>("textEncoder", partial.textEncoder, () => new onto_.TextEncoder())
+    if (!from.fs) onto_.fs = must<IFileSystem>("fs", partial.fs, () => new FileSystem(onto_), wrap("fs", partial.require))
+    // todo - process overrides
+    onto_.process = must<IProcess>("process", undefined, () => new Process(onto_, true, from.process.hrtime))
+    if (!from.crypto) onto_.crypto = must<ICrypto>("crypto", partial.crypto, undefined, () => requireCrypto(partial.require))
+    if (!from.performance) onto_.performance = must<IPerformance>("performance", partial.performance, () => new FPerformance(onto_))
+    return onto_
+}
+
+export function transfer<G extends IGlobalInPartial, N>(from: G, onto: N): N & IGlobalOut {
+    const g = prepare(from, onto) as N & IGlobalOut
+    installGo(g)
+    return g
+}
+
+
+export default function install<G extends IGlobalInPartial>(global: G): G & IGlobalOut {
+    const g = fill(global) as G & IGlobalOut
+    installGo(g)
+    return g
 }

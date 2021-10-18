@@ -1,5 +1,5 @@
-import {IGlobal} from "./global"
-import {IGo} from './go'
+import {IGlobalIn} from "../go"
+import {IGo} from '../go'
 
 export type Values =
     | [
@@ -8,6 +8,6 @@ export type Values =
     null,
     true,
     false,
-    IGlobal,
+    IGlobalIn,
     IGo,]
     | []

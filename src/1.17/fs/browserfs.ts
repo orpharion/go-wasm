@@ -1,4 +1,4 @@
-import bFS from 'browserfs/dist/node/core/FS'
+import {File, FileFlag as IFileFlag, FileSystem as bFS} from './browserfs/interfaces'
 import bStats from 'browserfs/dist/node/core/node_fs_stats'
 import {
     Callback,
@@ -8,11 +8,18 @@ import {
     CallbackLength,
     CallbackStat,
     ErrorPossible,
-    IFS,
+    IFileSystem,
     Stat
 } from '../fs'
 import {int, int64, uint32} from "../types"
 import {IProcess} from "../process";
+import {FileFlag} from 'browserfs/dist/node/core/file_flag'
+import {IBufferConstructor} from './browserfs/buffer'
+
+import {Path} from "./browserfs/path";
+// todo latent errors:
+
+// - must check everywhere, as go doesn't mind.
 
 /**
  * Go requires Open operations on directories to succeed to read them. I assume for locking during read.
@@ -64,6 +71,7 @@ class StatDirDummy implements bStats, Stat {
         this.birthtimeMs = this.ctime.getTime()
     }
 
+
     isFile() {
         return false
     }
@@ -95,22 +103,39 @@ class StatDirDummy implements bStats, Stat {
     chmod(mode: number) {
     }
 
-    toBuffer(): Buffer {
+    // @ts-ignore
+    toBuffer(): unknown {
         throw "error"
     }
 }
 
-type IGlobal = {
+/**
+ * See https://github.com/jvilk/BrowserFS/blob/v1.4.3/src/core/browserfs.ts.
+ * We don't include require.
+ */
+export interface IGlobalIn {
     process: IProcess
+    Buffer: IBufferConstructor
 }
 
 /**
  * The filesystem as exposed to GO, matching its signatures.
  * The wrapped filesystem isn't changed, and can be re-used as-is for other applications.
+ * See https://github.com/jvilk/BrowserFS/blob/master/src/core/file_system.ts: "Every path is an absolute path"
  */
-export class FS implements IFS {
-    _wrapped: bFS // the underlying browserFS
-    _global: IGlobal
+export class FileSystem implements IFileSystem {
+    #wrapped: bFS // the underlying browserFS
+    #global: IGlobalIn
+    #path: Path
+    /**
+     * Since browserfs uses files instead of fd, and uses fd methods,
+     * We need to track access state ourselves.
+     */
+    _fds: Map<int, File> = new Map()
+    /**
+     * Previously in browser script, fids would start at 100. Keeping that behaviour.
+     */
+    _fdNext: int = 100
 
     constants = {
         O_RDONLY: 0,
@@ -129,12 +154,27 @@ export class FS implements IFS {
         O_NONBLOCK: 2048,
     }
 
+    // todo path module?
     constructor(
         originalFS: bFS,
-        g: IGlobal
+        g: IGlobalIn
     ) {
-        this._wrapped = originalFS
-        this._global = g
+        this.#wrapped = originalFS
+        this.#global = g
+        this.#path = new Path(g)
+    }
+
+    getFileForFd(fd: number): { e: ErrorPossible, f: File | null } {
+        const file = this._fds.get(fd)
+        if (file) {
+            return {e: null, f: file}
+        }
+        return {
+            e: {
+                name: "EINVAL",
+                message: "internal file device not found"
+            }, f: null
+        }
     }
 
     flagIntToString(flags: number): string {
@@ -163,61 +203,90 @@ export class FS implements IFS {
         return flagStr
     }
 
-    readFile(filename: string, cb: (e: ErrorPossible, rv?: Buffer) => any) {
-        this._wrapped.readFile(filename, wcb(cb))
-    }
 
-    write(fd: number, buffer: Buffer, offset: number, length: number, position: number, cb: CallbackLength) {
+    // readFile(filename: string, cb: (e: ErrorPossible, rv?: Buffer) => any) {
+    //     this.#wrapped.readFile(filename, null, wcb(cb))
+    // }
+
+    write(fd: number, buf: Uint8Array, offset: number, length: number, position: number, cb: CallbackLength) {
         if (fd === 1 || fd === 2) {
-            if (offset !== 0 || length !== buffer.length || position !== null) {
+            if (offset !== 0 || length !== buf.length || position !== null) {
                 throw new Error("not implemented");
             }
-            cb(null, this.writeSync(fd, buffer))
+            cb(null, this.writeSync(fd, buf))
         } else {
-            // browser buffer has no copy method.
-            this._wrapped.write(fd, global.Buffer.from(buffer), offset, length, position, wcb(cb));
+            const {e, f} = this.getFileForFd(fd)
+            if (!f) {
+                throw e
+            } else {
+                // browser buffer has no copy method.
+                // todo see if this works!!!!!
+                return f.write(this.#global.Buffer.from(buf), offset, length, position, wcb(cb))
+            }
         }
     }
 
-    writeFile(filename: string, data: any, cb: Callback) {
-        return this._wrapped.writeFile(filename, data, wcb(cb))
-    }
+    // writeFile(filename: string, data: any, cb: Callback) {
+    //     return this.#wrapped.writeFile(filename, data, null, wcb(cb))
+    // }
 
     writeSync(fd: number, buf: Uint8Array): number {
-        let nl = -1
         switch (fd) {
             case 1:
-                this._global.process.stdout.write(buf)
+                this.#global.process.stdout.write(buf)
                 return buf.length
             case 2:
-                this._global.process.stderr.write(buf)
+                this.#global.process.stderr.write(buf)
                 return buf.length
             default:
-                return this._wrapped.writeSync(fd, buf as Buffer, 0, 0, 0)
+                const {e, f} = this.getFileForFd(fd)
+                if (!f) {
+                    throw e
+                } else {
+                    return f.writeSync(this.#global.Buffer.from(buf), 0, 0, 0)
+                }
         }
     }
 
     chmod(path: string, mode: uint32, cb: Callback): void {
-        this._wrapped.chmod(path, mode, wcb(cb))
+        this.#wrapped.chmod(this.#path.resolve(path), false, mode, wcb(cb))
     }
 
     chown(path: string, uid: uint32, gid: uint32, cb: Callback): void {
-        this._wrapped.chown(path, uid, gid, wcb(cb))
+        this.#wrapped.chown(this.#path.resolve(path), false, uid, gid, wcb(cb))
     }
 
-    // browserFS returns undefined on no error, but go does IsNull check.
     close(fd: number, cb: Callback) {
-        this._wrapped.close(fd, (e) => {
-            cb(e !== undefined ? e : null)
-        })
+        if (fd === DIR_FD) {
+            cb(null)
+        } else {
+            const {e, f} = this.getFileForFd(fd)
+            if (!f) {
+                cb(e)
+            } else {
+                f.close(wcb(cb))
+            }
+        }
+
     }
 
     fchmod(fd: int, mode: uint32, cb: Callback): void {
-        this._wrapped.fchmod(fd, mode, wcb(cb))
+        const {e, f} = this.getFileForFd(fd)
+        if (!f) {
+            cb(e)
+        } else {
+            f.chmod(mode, wcb(cb))
+        }
+
     }
 
     fchown(fd: int, uid: uint32, gid: uint32, cb: Callback): void {
-        this._wrapped.fchown(fd, uid, gid, wcb(cb))
+        const {e, f} = this.getFileForFd(fd)
+        if (!f) {
+            cb(e)
+        } else {
+            f.chown(uid, gid, wcb(cb))
+        }
     }
 
     // See DIR_FD
@@ -227,105 +296,149 @@ export class FS implements IFS {
                 cb(null, new StatDirDummy())
                 break
             default:
-                this._wrapped.fstat(fd, (e, s) => {
-                    cb(e === undefined ? null : e, s)
-                })
+                const {e, f} = this.getFileForFd(fd)
+                if (!f) {
+                    cb(e)
+                } else {
+                    f.stat((e, s) => {
+                        cb(e === undefined ? null : e, s)
+                    })
+                }
         }
     }
 
     fsync(fd: int, cb: Callback): void {
-        this._wrapped.fsync(fd, wcb(cb))
+        const {e, f} = this.getFileForFd(fd)
+        if (!f) {
+            cb(e)
+        } else {
+            f.sync(wcb(cb))
+        }
     }
 
     ftruncate(fd: int, length: int64, cb: Callback): void {
-        this._wrapped.ftruncate(fd, length, wcb(cb))
+        const {e, f} = this.getFileForFd(fd)
+        if (!f) {
+            cb(e)
+        } else {
+            f.truncate(length, wcb(cb))
+        }
+
     }
 
     lchown(path: string, uid: int, gid: int, cb: Callback): void {
-        this._wrapped.lchown(path, uid, gid, wcb(cb))
+        this.#wrapped.chown(this.#path.resolve(path), true, uid, gid, wcb(cb))
     }
 
     link(path: string, link: string, cb: Callback): void {
-        this._wrapped.link(path, link, wcb(cb))
+        this.#wrapped.link(this.#path.resolve(path), link, wcb(cb))
     }
 
     lstat(path: string, cb: CallbackStat): void {
-        this._wrapped.lstat(path, (e, s) => {
-            cb(e === undefined ? null : e, s)
-        })
+        this.#wrapped.stat(this.#path.resolve(path), true, wcb(cb))
     }
 
     mkdir(path: string, perm: uint32, cb: Callback): void {
-        this._wrapped.mkdir(path, perm, wcb(cb))
+        this.#wrapped.mkdir(this.#path.resolve(path), perm, wcb(cb))
     }
 
     // browserFS uses string flags, go uses uint flags.
     // See DIR_FD.
     // syscall_js just needs fstat to work and confirm it's a directory. Obviously, race conditions can occur.
+    // go uses open(O_WRONLY | O_CREATE | O_TRUNC ) to create files.
     open(path: string, flags: number, mode: number, cb: CallbackFd) {
-        let flagStr = this.flagIntToString(flags)
-        this._wrapped.stat(path, (e, s) => {
-            if (e || s?.isFile()) {
-                this._wrapped.open(path, flagStr, mode, wcb(cb))
-            } else if (s?.isDirectory()) {
-                cb(null, DIR_FD)
-            } else {
-                throw "invalid stat"
-            }
-        })
+        path = this.#path.resolve(path)
+        const flagStr = this.flagIntToString(flags)
+        const fileFlag = FileFlag.getFileFlag(flagStr)
+        try {
+
+            this.#wrapped.stat(path, false, (e, s) => {
+                if (e || s?.isFile()) {
+                    // try send open a fileFlag instead, expecting it to be?
+
+                    this.#wrapped.open(path, fileFlag as unknown as IFileFlag, mode,
+                        (e, f?) => {
+                            if (f && !e) {
+                                const fd = this._fdNext += 1
+                                this._fds.set(fd, f)
+                                cb(e ? e : null, fd)
+                            } else {
+                                cb(e ? e : null)
+                            }
+                        })
+                } else if (s?.isDirectory()) {
+                    cb(null, DIR_FD)
+                } else {
+                    throw "invalid stat"
+                }
+            })
+        } catch (e) {
+            console.log(e)
+            throw e
+        }
     }
 
-    read(fd: number, buffer: Uint8Array, offset: number, length: number, position: number | null, cb: CallbackLength) {
+    read(fd: number, buf: Uint8Array, offset: number, length: number, position: number | null, cb: CallbackLength) {
         switch (fd) {
             case 0:
-                const in_ = process.stdin.read() as Buffer
-                buffer.set(in_)
-                cb(null, in_.length)
+                const in_ = this.#global.process.stdin.read()
+                if (in_) {
+                    buf.set(in_)
+                    cb(null, in_.length)
+                } else {
+                    cb(null, 0)
+                }
                 return
             default:
-                const buf = Buffer.from(buffer)
-                this._wrapped.read(fd, buf, offset, length, position, (e, n) => {
-                    buffer.set(buf, 0)
-                    cb(e === undefined ? null : e, n)
-                })
+                const {e, f} = this.getFileForFd(fd)
+                if (!f) {
+                    cb(e)
+                } else {
+                    f.read(this.#global.Buffer.from(buf), offset, length, position, (e, n, b) => {
+                        // this is extremely odd. The data isn't transferred to the provided buffer.
+                        if (b) {
+                            buf.set(b, 0)
+                        }
+                        cb(e ? e : null, n)
+                    })
+                }
         }
     }
 
     readdir(path: string, cb: CallbackDir) {
-        this._wrapped.readdir(path, wcb(cb))
+        this.#wrapped.readdir(this.#path.resolve(path), wcb(cb))
     }
 
     readlink(path: string, cb: CallbackDst): void {
-        this._wrapped.readlink(path, wcb(cb))
+        this.#wrapped.readlink(this.#path.resolve(path), wcb(cb))
     }
 
     rename(from: string, to: string, cb: Callback): void {
-        this._wrapped.rename(from, to, wcb(cb))
+        this.#wrapped.rename(this.#path.resolve(from), this.#path.resolve(to), wcb(cb))
     }
 
     rmdir(path: string, cb: Callback): void {
-        this._wrapped.rmdir(path, wcb(cb))
+        this.#wrapped.rmdir(this.#path.resolve(path), wcb(cb))
     }
 
     stat(path: string, cb: CallbackStat) {
-        this._wrapped.stat(path, (e, s) => {
-            cb(e === undefined ? null : e, s)
-        })
+        this.#wrapped.stat(this.#path.resolve(path), false, wcb(cb))
     }
 
+    // todo symlink type
     symlink(path: string, link: string, cb: Callback): void {
-        this._wrapped.symlink(path, link, wcb(cb))
+        this.#wrapped.symlink(this.#path.resolve(path), link, "file", wcb(cb))
     }
 
     truncate(path: string, length: int64, cb: Callback): void {
-        this._wrapped.truncate(path, length, wcb(cb))
+        this.#wrapped.truncate(this.#path.resolve(path), length, wcb(cb))
     }
 
     unlink(path: string, cb: Callback): void {
-        this._wrapped.unlink(path, wcb(cb))
+        this.#wrapped.unlink(this.#path.resolve(path), wcb(cb))
     }
 
     utimes(path: string, atime: int64, mtime: int64, cb: Callback): void {
-        this._wrapped.utimes(path, atime, mtime, wcb(cb))
+        this.#wrapped.utimes(this.#path.resolve(path), new Date(atime), new Date(mtime), wcb(cb))
     }
 }

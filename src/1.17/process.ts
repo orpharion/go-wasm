@@ -8,6 +8,24 @@ import {enosys} from './enosys'
 import {IConsole, IConsoleWriter} from './console'
 import {ITextDecoder} from "./encoding";
 
+type Ihrtime = (time?: [number, number]) => [number, number]
+
+export interface IProcessIn {
+    hrtime: Ihrtime
+}
+
+export interface IGlobalIn {
+    textDecoder: ITextDecoder,
+    console: IConsole,
+    /**
+     * We need a reference hrtime specification for performance module.
+     */
+    process: IProcessIn
+}
+
+export type IGlobalOut = IGlobalIn & { process: IProcess }
+
+
 export interface IStreamWritable {
     write(chunk: Uint8Array, encoding?: string | null, callback?: (e?: Error | null | undefined) => void): boolean
 }
@@ -18,7 +36,11 @@ export interface IStreamReadable {
     read(size?: number): Uint8Array | null
 }
 
-export class StreamWritable implements IStreamWritable {
+export interface IStreamDuplex extends IStreamReadable, IStreamWritable {
+
+}
+
+export class StreamDuplex implements IStreamDuplex {
     fd: number
     #flushTo?: (data: Uint8Array, encoding?: string | null) => void
     /**
@@ -26,7 +48,7 @@ export class StreamWritable implements IStreamWritable {
      * @private
      */
     #flushOn = 0x0A
-    buf: Uint8Array = new Uint8Array()
+    #buf: Uint8Array = new Uint8Array()
 
     constructor(fd: number, flushTo?: IConsoleWriter) {
         this.fd = fd
@@ -40,17 +62,25 @@ export class StreamWritable implements IStreamWritable {
      * @param callback
      */
     write(chunk: Uint8Array, encoding?: string | null, callback?: (e?: Error | null | undefined) => void): boolean {
-        let lenO = this.buf.length
+        let lenO = this.#buf.length
         let buf = new Uint8Array(lenO + chunk.length)
-        buf.set(this.buf, 0)
+        buf.set(this.#buf, 0)
         buf.set(chunk, lenO)
-        this.buf = buf
-        const nl = this.buf.lastIndexOf(this.#flushOn)
+        this.#buf = buf
+        const nl = this.#buf.lastIndexOf(this.#flushOn)
         if (nl != -1 && this.#flushTo) {
-            this.#flushTo(this.buf.slice(0, nl), encoding)
-            this.buf = this.buf.slice(nl + 1);
+            this.#flushTo(this.#buf.slice(0, nl), encoding)
+            this.#buf = this.#buf.slice(nl + 1);
         }
         return true
+    }
+
+    read(size?: number): Uint8Array | null {
+        size = size ? size : this.#buf.length
+        size = size > this.#buf.length ? this.#buf.length : size
+        let out = this.#buf.slice(0, size)
+        this.#buf = this.#buf.slice(size + 1)
+        return out
     }
 }
 
@@ -80,17 +110,13 @@ export class StdIn extends StreamReadable {
     }
 }
 
-type IGlobal = {
-    textDecoder: ITextDecoder,
-    console: IConsole
-}
 
-export class StdOut extends StreamWritable {
+export class StdOut extends StreamDuplex {
     fd: 1 = 1
-    _global: IGlobal
+    #global: IGlobalIn
 
     constructor(
-        g: IGlobal,
+        g: IGlobalIn,
         toConsole: boolean = true
     ) {
         super(1,
@@ -98,16 +124,16 @@ export class StdOut extends StreamWritable {
                 g.console.log(g.textDecoder.decode(data))
             } : undefined
         )
-        this._global = g
+        this.#global = g
     }
 }
 
-export class StdErr extends StreamWritable {
+export class StdErr extends StreamDuplex {
     fd: 2 = 2
-    _global: IGlobal
+    #global: IGlobalIn
 
     constructor(
-        g: IGlobal,
+        g: IGlobalIn,
         toConsole: boolean = true
     ) {
         super(2,
@@ -115,7 +141,7 @@ export class StdErr extends StreamWritable {
                 g.console.error(g.textDecoder.decode(data))
             } : undefined
         )
-        this._global = g
+        this.#global = g
     }
 }
 
@@ -150,8 +176,8 @@ export interface IProcess {
 
     // std streams not implemented in go, but added here.
     stdin: IStreamReadable & { fd: 0 }
-    stdout: IStreamWritable & { fd: 1 }
-    stderr: IStreamWritable & { fd: 2 }
+    stdout: IStreamDuplex & { fd: 1 }
+    stderr: IStreamDuplex & { fd: 2 }
 
     /**
      * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L326
@@ -178,14 +204,19 @@ export interface IProcess {
     hrtime(time?: [number, number]): [number, number]
 }
 
-export default class Process implements IProcess {
-    _global: IGlobal
+// todo integrate with filesystem to check #cwd exists.
+export class Process<G extends IGlobalIn> implements IProcess {
+    #global: G
+    #cwd: string
+    #hrtime: Ihrtime
     stdin: IStreamReadable & { fd: 0 }
-    stdout: IStreamWritable & { fd: 1 }
-    stderr: IStreamWritable & { fd: 2 }
+    stdout: IStreamDuplex & { fd: 1 }
+    stderr: IStreamDuplex & { fd: 2 }
 
-    constructor(g: IGlobal, pipe: boolean = true) {
-        this._global = g
+    constructor(g: G, pipe: boolean = true, hrtime: Ihrtime) {
+        this.#cwd = "/"
+        this.#global = g
+        this.#hrtime = hrtime
         this.stdin = new StdIn()
         this.stdout = new StdOut(g, pipe)
         this.stderr = new StdErr(g, pipe)
@@ -219,16 +250,22 @@ export default class Process implements IProcess {
     }
 
     cwd(): string {
-        throw enosys()
+        return this.#cwd
     }
 
-    chdir() {
-        throw enosys()
+    chdir(path: string) {
+        this.#cwd = path
+        // throw enosys()
     }
 
     hrtime() {
-        return process.hrtime() // todo!
+        return this.#hrtime()
     }
-
-
 }
+
+export default function install<G extends IGlobalIn>(global: G, pipe: boolean = true, hrtime: Ihrtime): (G & IGlobalOut) {
+    const g_ = global as G & IGlobalOut
+    g_.process = new Process(global, pipe, hrtime)
+    return g_
+}
+

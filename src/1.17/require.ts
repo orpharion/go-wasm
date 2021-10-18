@@ -27,4 +27,3 @@ export function wrap<T>(id: string, req?: IRequire): () => T | undefined {
     return () => req ? req(id) as T : undefined
 }
 
-require

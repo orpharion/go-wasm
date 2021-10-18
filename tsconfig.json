@@ -1,16 +1,22 @@
 {
     "compilerOptions": {
-        "moduleResolution": "node",
-        "noEmitOnError": true,
-        "noImplicitAny": true,
-        "skipLibCheck": true,
-        "outFile": "dist/1.17/bundle.js",
         "target": "ES2020",
-        "noFallthroughCasesInSwitch": true,
+
+        "moduleResolution": "node",
+
         "allowJs": false,
         "allowSyntheticDefaultImports": false,
+        "forceConsistentCasingInFileNames": true,
+        "noEmitOnError": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitAny": true,
+        "skipLibCheck": true,
         "strict": true,
+
+
         "declaration": true,
+
+        "outFile": "dist/1.17/bundle.js",
         "rootDir": "src",
         "module": "AMD"
     },

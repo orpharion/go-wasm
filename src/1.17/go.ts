@@ -1,8 +1,22 @@
 import {uint32} from "./types"
 import {IInstance} from "./webAssembly/instance"
-import {Values} from './values'
+import {Values} from './go/values'
 import {default as newImportObject, IImportObjectGo} from './webAssembly/importObjectGo'
-import {IGlobal} from "./global";
+import {ITextDecoder, ITextEncoder} from "./encoding";
+import {IFileSystem} from "./fs";
+
+export interface IGlobalIn {
+    textDecoder: ITextDecoder
+    // importObject
+    textEncoder: ITextEncoder
+    // importObject
+    fs: IFileSystem
+    Uint8Array: typeof Uint8Array
+}
+
+export interface IGlobalOut extends IGlobalIn {
+    go: IGo
+}
 
 /**
  * See https://github.com/golang/go/blob/go1.17/src/syscall/js/func.go#L71
@@ -81,8 +95,8 @@ export interface IGo {
  * to an isolated process.
  * TODO: move process stuff to process?
  */
-export default class Go implements IGo {
-    _global: IGlobal
+export class Go<G extends IGlobalIn> implements IGo {
+    #global: G
     argv: string[]
     env: { [key: string]: string } = {}
 
@@ -110,10 +124,8 @@ export default class Go implements IGo {
 
     importObject: { go: IImportObjectGo }
 
-    constructor(
-        g: IGlobal,
-    ) {
-        this._global = g
+    constructor(g: G) {
+        this.#global = g
 
         this.argv = ["js"];
         this.env = {};
@@ -124,19 +136,21 @@ export default class Go implements IGo {
         this._scheduledTimeouts = new Map();
         this._nextCallbackTimeoutID = 1;
         this.timeOrigin = Date.now() - performance.now()
-        this.importObject = newImportObject(this, g)
+        this.importObject = newImportObject({...g, go: this})
         this._inst = {} as IInstance
         this.mem = {} as DataView
     }
 
-    reset() {
+    reset(instance: IInstance) {
+        this._inst = instance;
+        this.mem = new DataView(this._inst.exports.mem.buffer);
         this._values = [
             NaN,
             0,
             null,
             true,
             false,
-            this._global,
+            this.#global,
             this,
         ]
         this._goRefCounts = new Array(this._values.length).fill(Infinity)
@@ -145,12 +159,11 @@ export default class Go implements IGo {
             [null, 2],
             [true, 3],
             [false, 4],
-            [this._global, 5],
+            [this.#global, 5],
             [this, 6],
         ]);
         this._idPool = []
         this.exited = false
-
     }
 
     exit(code: number) {
@@ -236,7 +249,7 @@ export default class Go implements IGo {
     loadSlice(addr: number): Uint8Array {
         const array = this.getInt64(addr + 0);
         const len = this.getInt64(addr + 8);
-        return new this._global.Uint8Array(this._inst.exports.mem.buffer, array, len);
+        return new this.#global.Uint8Array(this._inst.exports.mem.buffer, array, len);
     }
 
     loadSliceOfValues(addr: number): any[] {
@@ -252,18 +265,16 @@ export default class Go implements IGo {
     loadString(addr: number): string {
         const saddr = this.getInt64(addr + 0);
         const len = this.getInt64(addr + 8);
-        return this._global.textDecoder.decode(new DataView(this._inst.exports.mem.buffer, saddr, len));
+        return this.#global.textDecoder.decode(new DataView(this._inst.exports.mem.buffer, saddr, len));
     }
 
     async run(instance: WebAssembly.Instance) {
-
         if (!(instance instanceof WebAssembly.Instance)) {
             throw new Error("Go.run: WebAssembly.Instance expected");
         }
-        this._inst = instance as IInstance;
-        this.mem = new DataView(this._inst.exports.mem.buffer);
-        const textEncoder = this._global.textEncoder
-        this.reset()
+        this.reset(instance as IInstance)
+
+        const textEncoder = this.#global.textEncoder
 
         // Pass command line arguments and environment variables to WebAssembly by writing them to the linear memory.
         let offset = 4096;
@@ -271,7 +282,7 @@ export default class Go implements IGo {
         const strPtr = (str: string) => {
             const ptr = offset;
             const bytes = textEncoder.encode(str + "\0");
-            new this._global.Uint8Array(this.mem.buffer, offset, bytes.length).set(bytes);
+            new this.#global.Uint8Array(this.mem.buffer, offset, bytes.length).set(bytes);
             offset += bytes.length;
             if (offset % 8 !== 0) {
                 offset += 8 - (offset % 8);
@@ -299,7 +310,6 @@ export default class Go implements IGo {
             this.mem.setUint32(offset + 4, 0, true);
             offset += 8;
         });
-
         this._inst.exports.run(argc, argv);
         if (this.exited) {
             this._resolveExitPromise();
@@ -324,13 +334,19 @@ export default class Go implements IGo {
      *     https://www.typescriptlang.org/docs/handbook/functions.html#this
      */
     _makeFuncWrapper(id: number): () => any {
-        const g = this;
+        const go = this;
         return function (this: IGo) {
             const event = {id: id, this: this, args: arguments, result: undefined};
-            g._pendingEvent = event;
-            g._resume();
+            go._pendingEvent = event;
+            go._resume();
             return event.result;
         };
     }
 }
 
+
+export default function install<T extends IGlobalIn>(g: T): T & IGlobalOut {
+    const g_ = g as T & IGlobalOut
+    g_.go = new Go(g)
+    return g_
+}

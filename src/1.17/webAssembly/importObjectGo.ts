@@ -1,7 +1,7 @@
 import {IGo} from '../go'
-import {IInstance}from './instance'
+import {IInstance} from './instance'
 import {ITextEncoder} from '../encoding'
-import {IFS} from "../fs";
+import {IFileSystem} from "../fs";
 
 type StackPointer = number
 type SP = StackPointer
@@ -62,60 +62,66 @@ export interface IImportObjectGo {
     "debug"(value: any): void
 }
 
-type IGlobal = {
+type IGlobalIn = {
     textEncoder: ITextEncoder,
-    fs: IFS,
+    fs: IFileSystem,
+    go: IGo,
 }
 
 /**
  * See https://github.com/golang/go/blob/go1.17/src/cmd/link/internal/wasm/asm.go#L285
  */
-export default function newImportObject(
-    go: IGo, 
-    g: IGlobal
+export default function newImportObject<G extends IGlobalIn>(
+    global: G
 ): { go: IImportObjectGo } {
     return {
         go: {
             // func wasmExit(code int32)
             "runtime.wasmExit"(sp: SP) {
                 sp >>>= 0;
-                const code = go.mem.getInt32(sp + 8, true);
-                go.exited = true;
-                go._inst = {} as IInstance;
-                go._values = [];
-                go._goRefCounts = [];
-                go._ids = new Map([]);
-                go._idPool = [];
-                go.exit(code);
+                const code = global.go.mem.getInt32(sp + 8, true);
+                global.go.exited = true;
+                global.go._inst = {} as IInstance;
+                global.go._values = [];
+                global.go._goRefCounts = [];
+                global.go._ids = new Map([]);
+                global.go._idPool = [];
+                // // clear remaining timeouts. One always lingers, it seems.
+                // console.log("scheduledTimeouts remaining", (go_ as any)._scheduledTimeouts.length);
+                // (go_ as any)._scheduledTimeouts.forEach((v: number, k: any) => {
+                //     clearTimeout(v as number);
+                //     (go_ as any)._scheduledTimeouts.delete(k)
+                // })
+                global.go.exit(code);
             },
 
             // func wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
             "runtime.wasmWrite"(sp: SP) {
                 sp >>>= 0;
-                const fd = go.getInt64(sp + 8);
-                const p = go.getInt64(sp + 16);
-                const n = go.mem.getInt32(sp + 24, true);
-                g.fs.writeSync(fd, new Uint8Array(go._inst.exports.mem.buffer, p, n));
+                const fd = global.go.getInt64(sp + 8);
+                const p = global.go.getInt64(sp + 16);
+                const n = global.go.mem.getInt32(sp + 24, true);
+                global.fs.writeSync(fd, new Uint8Array(global.go._inst.exports.mem.buffer, p, n));
             },
 
             // func resetMemoryDataView()
             "runtime.resetMemoryDataView"(sp: SP) {
                 sp >>>= 0;
-                go.mem = new DataView(go._inst.exports.mem.buffer);
+                global.go.mem = new DataView(global.go._inst.exports.mem.buffer);
             },
 
             // func nanotime1() int64
             "runtime.nanotime1"(sp: SP) {
                 sp >>>= 0;
-                go.setInt64(sp + 8, (go.timeOrigin + performance.now()) * 1000000);
+                global.go.setInt64(sp + 8, (global.go.timeOrigin + performance.now()) * 1000000);
             },
 
             // func walltime() (sec int64, nsec int32)
             "runtime.walltime"(sp: SP) {
                 sp >>>= 0;
                 const msec = (new Date).getTime();
-                go.setInt64(sp + 8, msec / 1000);
-                go.mem.setInt32(sp + 16, (msec % 1000) * 1000000, true);
+                global.go.setInt64(sp + 8, msec / 1000);
+                global.go.mem.setInt32(sp + 16, (msec % 1000) * 1000000, true);
             },
 
             // It appears that this is still necessary
@@ -123,110 +129,110 @@ export default function newImportObject(
             "runtime.walltime1"(sp: SP) {
                 sp >>>= 0;
                 const msec = (new Date).getTime();
-                go.setInt64(sp + 8, msec / 1000);
-                go.mem.setInt32(sp + 16, (msec % 1000) * 1000000, true);
+                global.go.setInt64(sp + 8, msec / 1000);
+                global.go.mem.setInt32(sp + 16, (msec % 1000) * 1000000, true);
             },
 
             // func scheduleTimeoutEvent(delay int64) int32
             "runtime.scheduleTimeoutEvent"(sp: SP) {
                 sp >>>= 0;
-                const id = go._nextCallbackTimeoutID;
-                go._nextCallbackTimeoutID++;
-                go._scheduledTimeouts.set(id, setTimeout(
+                const id = global.go._nextCallbackTimeoutID;
+                global.go._nextCallbackTimeoutID++;
+                global.go._scheduledTimeouts.set(id, setTimeout(
                     () => {
-                        go._resume();
-                        while (go._scheduledTimeouts.has(id)) {
+                        global.go._resume();
+                        while (global.go._scheduledTimeouts.has(id)) {
                             // for some reason Go failed to register the timeout event, log and try again
                             // (temporary workaround for https://github.com/golang/go/issues/28975)
                             console.warn("scheduleTimeoutEvent: missed timeout event");
-                            go._resume();
+                            global.go._resume();
                         }
                     },
-                    go.getInt64(sp + 8) + 1, // setTimeout has been seen to fire up to 1 millisecond early
+                    global.go.getInt64(sp + 8) + 1, // setTimeout has been seen to fire up to 1 millisecond early
                 ));
-                go.mem.setInt32(sp + 16, id, true);
+                global.go.mem.setInt32(sp + 16, id, true);
             },
 
             // func clearTimeoutEvent(id int32)
             "runtime.clearTimeoutEvent"(sp: SP) {
                 sp >>>= 0;
-                const id = go.mem.getInt32(sp + 8, true);
-                clearTimeout(go._scheduledTimeouts.get(id));
-                go._scheduledTimeouts.delete(id);
+                const id = global.go.mem.getInt32(sp + 8, true);
+                clearTimeout(global.go._scheduledTimeouts.get(id));
+                global.go._scheduledTimeouts.delete(id);
             },
 
             // func getRandomData(r []byte)
             "runtime.getRandomData"(sp: SP) {
                 sp >>>= 0;
-                crypto.getRandomValues(go.loadSlice(sp + 8));
+                crypto.getRandomValues(global.go.loadSlice(sp + 8));
             },
 
             // func finalizeRef(v ref)
             "syscall/js.finalizeRef"(sp: SP) {
                 sp >>>= 0;
-                const id = go.mem.getUint32(sp + 8, true);
-                go._goRefCounts[id]--;
-                if (go._goRefCounts[id] === 0) {
-                    const v = go._values[id];
-                    go._values[id] = null;
-                    go._ids.delete(v);
-                    go._idPool.push(id);
+                const id = global.go.mem.getUint32(sp + 8, true);
+                global.go._goRefCounts[id]--;
+                if (global.go._goRefCounts[id] === 0) {
+                    const v = global.go._values[id];
+                    global.go._values[id] = null;
+                    global.go._ids.delete(v);
+                    global.go._idPool.push(id);
                 }
             },
 
             // func stringVal(value string) ref
             "syscall/js.stringVal"(sp: SP) {
                 sp >>>= 0;
-                go.storeValue(sp + 24, go.loadString(sp + 8));
+                global.go.storeValue(sp + 24, global.go.loadString(sp + 8));
             },
 
             // func valueGet(v ref, p string) ref
             "syscall/js.valueGet"(sp: SP) {
                 sp >>>= 0;
-                const result = Reflect.get(go.loadValue(sp + 8), go.loadString(sp + 16));
-                sp = go._inst.exports.getsp() >>> 0; // see comment above
-                go.storeValue(sp + 32, result);
+                const result = Reflect.get(global.go.loadValue(sp + 8), global.go.loadString(sp + 16));
+                sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                global.go.storeValue(sp + 32, result);
             },
 
             // func valueSet(v ref, p string, x ref)
             "syscall/js.valueSet"(sp: SP) {
                 sp >>>= 0;
-                Reflect.set(go.loadValue(sp + 8), go.loadString(sp + 16), go.loadValue(sp + 32));
+                Reflect.set(global.go.loadValue(sp + 8), global.go.loadString(sp + 16), global.go.loadValue(sp + 32));
             },
 
             // func valueDelete(v ref, p string)
             "syscall/js.valueDelete"(sp: SP) {
                 sp >>>= 0;
-                Reflect.deleteProperty(go.loadValue(sp + 8), go.loadString(sp + 16));
+                Reflect.deleteProperty(global.go.loadValue(sp + 8), global.go.loadString(sp + 16));
             },
 
             // func valueIndex(v ref, i int) ref
             "syscall/js.valueIndex"(sp: SP) {
                 sp >>>= 0;
-                go.storeValue(sp + 24, Reflect.get(go.loadValue(sp + 8), go.getInt64(sp + 16)));
+                global.go.storeValue(sp + 24, Reflect.get(global.go.loadValue(sp + 8), global.go.getInt64(sp + 16)));
             },
 
             // valueSetIndex(v ref, i int, x ref)
             "syscall/js.valueSetIndex"(sp: SP) {
                 sp >>>= 0;
-                Reflect.set(go.loadValue(sp + 8), go.getInt64(sp + 16), go.loadValue(sp + 24));
+                Reflect.set(global.go.loadValue(sp + 8), global.go.getInt64(sp + 16), global.go.loadValue(sp + 24));
             },
 
             // func valueCall(v ref, m string, args []ref) (ref, bool)
             "syscall/js.valueCall"(sp: SP) {
                 sp >>>= 0;
                 try {
-                    const v = go.loadValue(sp + 8);
-                    const m = Reflect.get(v, go.loadString(sp + 16));
-                    const args = go.loadSliceOfValues(sp + 32);
+                    const v = global.go.loadValue(sp + 8);
+                    const m = Reflect.get(v, global.go.loadString(sp + 16));
+                    const args = global.go.loadSliceOfValues(sp + 32);
                     const result = Reflect.apply(m, v, args);
-                    sp = go._inst.exports.getsp() >>> 0; // see comment above
-                    go.storeValue(sp + 56, result);
-                    go.mem.setUint8(sp + 64, 1);
+                    sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                    global.go.storeValue(sp + 56, result);
+                    global.go.mem.setUint8(sp + 64, 1);
                 } catch (err) {
-                    sp = go._inst.exports.getsp() >>> 0; // see comment above
-                    go.storeValue(sp + 56, err);
-                    go.mem.setUint8(sp + 64, 0);
+                    sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                    global.go.storeValue(sp + 56, err);
+                    global.go.mem.setUint8(sp + 64, 0);
                 }
             },
 
@@ -234,16 +240,16 @@ export default function newImportObject(
             "syscall/js.valueInvoke"(sp: SP) {
                 sp >>>= 0;
                 try {
-                    const v = go.loadValue(sp + 8);
-                    const args = go.loadSliceOfValues(sp + 16);
+                    const v = global.go.loadValue(sp + 8);
+                    const args = global.go.loadSliceOfValues(sp + 16);
                     const result = Reflect.apply(v, undefined, args);
-                    sp = go._inst.exports.getsp() >>> 0; // see comment above
-                    go.storeValue(sp + 40, result);
-                    go.mem.setUint8(sp + 48, 1);
+                    sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                    global.go.storeValue(sp + 40, result);
+                    global.go.mem.setUint8(sp + 48, 1);
                 } catch (err) {
-                    sp = go._inst.exports.getsp() >>> 0; // see comment above
-                    go.storeValue(sp + 40, err);
-                    go.mem.setUint8(sp + 48, 0);
+                    sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                    global.go.storeValue(sp + 40, err);
+                    global.go.mem.setUint8(sp + 48, 0);
                 }
             },
 
@@ -251,74 +257,74 @@ export default function newImportObject(
             "syscall/js.valueNew"(sp: SP) {
                 sp >>>= 0;
                 try {
-                    const v = go.loadValue(sp + 8);
-                    const args = go.loadSliceOfValues(sp + 16);
+                    const v = global.go.loadValue(sp + 8);
+                    const args = global.go.loadSliceOfValues(sp + 16);
                     const result = Reflect.construct(v, args);
-                    sp = go._inst.exports.getsp() >>> 0; // see comment above
-                    go.storeValue(sp + 40, result);
-                    go.mem.setUint8(sp + 48, 1);
+                    sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                    global.go.storeValue(sp + 40, result);
+                    global.go.mem.setUint8(sp + 48, 1);
                 } catch (err) {
-                    sp = go._inst.exports.getsp() >>> 0; // see comment above
-                    go.storeValue(sp + 40, err);
-                    go.mem.setUint8(sp + 48, 0);
+                    sp = global.go._inst.exports.getsp() >>> 0; // see comment above
+                    global.go.storeValue(sp + 40, err);
+                    global.go.mem.setUint8(sp + 48, 0);
                 }
             },
 
             // func valueLength(v ref) int
             "syscall/js.valueLength"(sp: SP) {
                 sp >>>= 0;
-                go.setInt64(sp + 16, parseInt(go.loadValue(sp + 8).length));
+                global.go.setInt64(sp + 16, parseInt(global.go.loadValue(sp + 8).length));
             },
 
             // valuePrepareString(v ref) (ref, int)
             "syscall/js.valuePrepareString"(sp: SP) {
                 sp >>>= 0;
-                const str = g.textEncoder.encode(String(go.loadValue(sp + 8)));
-                go.storeValue(sp + 16, str);
-                go.setInt64(sp + 24, str.length);
+                const str = global.textEncoder.encode(String(global.go.loadValue(sp + 8)));
+                global.go.storeValue(sp + 16, str);
+                global.go.setInt64(sp + 24, str.length);
             },
 
             // valueLoadString(v ref, b []byte)
             "syscall/js.valueLoadString"(sp: SP) {
                 sp >>>= 0;
-                const str = go.loadValue(sp + 8);
-                go.loadSlice(sp + 16).set(str);
+                const str = global.go.loadValue(sp + 8);
+                global.go.loadSlice(sp + 16).set(str);
             },
 
             // func valueInstanceOf(v ref, t ref) bool
             "syscall/js.valueInstanceOf"(sp: SP) {
                 sp >>>= 0;
-                go.mem.setUint8(sp + 24, (go.loadValue(sp + 8) instanceof go.loadValue(sp + 16)) ? 1 : 0);
+                global.go.mem.setUint8(sp + 24, (global.go.loadValue(sp + 8) instanceof global.go.loadValue(sp + 16)) ? 1 : 0);
             },
 
             // func copyBytesToGo(dst []byte, src ref) (int, bool)
             "syscall/js.copyBytesToGo"(sp: SP) {
                 sp >>>= 0;
-                const dst = go.loadSlice(sp + 8);
-                const src = go.loadValue(sp + 32);
+                const dst = global.go.loadSlice(sp + 8);
+                const src = global.go.loadValue(sp + 32);
                 if (!(src instanceof Uint8Array || src instanceof Uint8ClampedArray)) {
-                    go.mem.setUint8(sp + 48, 0);
+                    global.go.mem.setUint8(sp + 48, 0);
                     return;
                 }
                 const toCopy = src.subarray(0, dst.length);
                 dst.set(toCopy);
-                go.setInt64(sp + 40, toCopy.length);
-                go.mem.setUint8(sp + 48, 1);
+                global.go.setInt64(sp + 40, toCopy.length);
+                global.go.mem.setUint8(sp + 48, 1);
             },
 
             // func copyBytesToJS(dst ref, src []byte) (int, bool)
             "syscall/js.copyBytesToJS"(sp: SP) {
                 sp >>>= 0;
-                const dst = go.loadValue(sp + 8);
-                const src = go.loadSlice(sp + 16);
+                const dst = global.go.loadValue(sp + 8);
+                const src = global.go.loadSlice(sp + 16);
                 if (!(dst instanceof Uint8Array || dst instanceof Uint8ClampedArray)) {
-                    go.mem.setUint8(sp + 48, 0);
+                    global.go.mem.setUint8(sp + 48, 0);
                     return;
                 }
                 const toCopy = src.subarray(0, dst.length);
                 dst.set(toCopy);
-                go.setInt64(sp + 40, toCopy.length);
-                go.mem.setUint8(sp + 48, 1);
+                global.go.setInt64(sp + 40, toCopy.length);
+                global.go.mem.setUint8(sp + 48, 1);
             },
 
             "debug"(value: any) {

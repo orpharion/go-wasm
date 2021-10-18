@@ -45,7 +45,7 @@ export interface Stat {
  * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go.
  * The base FS interface required by Go. See also IFS.
  */
-export interface IFS {
+export interface IFileSystem {
     /**
      * See
      *     https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L21
@@ -188,7 +188,7 @@ export interface IFS {
     utimes(path: string, atime: int64, mtime: int64, cb: Callback): void
 }
 
-type IGlobal = {
+export type IGlobalIn = {
     textDecoder: ITextDecoder
 }
 
@@ -198,10 +198,10 @@ type IGlobal = {
  * Process is unused in the reference Go polyfill, as it just writes directly
  * to globalThis.console.log.
  */
-export default class FS implements IFS {
-    _global: IGlobal
+export class FileSystem implements IFileSystem {
+    _global: IGlobalIn
 
-    constructor(g: IGlobal) {
+    constructor(g: IGlobalIn) {
         this._global = g
     }
 
@@ -320,4 +320,15 @@ export default class FS implements IFS {
     utimes(path: string, atime: number, mtime: number, callback: Callback) {
         callback(enosys())
     }
+}
+
+export interface IGlobalOut extends IGlobalIn {
+    fs: IFileSystem
+}
+
+
+export default function install<T extends IGlobalIn>(g: IGlobalIn): (T & IGlobalOut) {
+    const g_ = g as T & IGlobalOut
+    g_.fs = new FileSystem(g)
+    return g_
 }
