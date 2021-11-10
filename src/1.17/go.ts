@@ -1,9 +1,10 @@
-import {uint32} from "./types"
+import {int, uint32} from "./types"
 import {IInstance} from "./webAssembly/instance"
 import {Values} from './go/values'
 import {default as newImportObject, IImportObjectGo} from './webAssembly/importObjectGo'
 import {ITextDecoder, ITextEncoder} from "./encoding";
 import {IFileSystem} from "./fs";
+import {IProcess, IStreamDuplex, IStreamReadable} from "./process";
 
 export interface IGlobalIn {
     textDecoder: ITextDecoder
@@ -12,6 +13,7 @@ export interface IGlobalIn {
     // importObject
     fs: IFileSystem
     Uint8Array: typeof Uint8Array
+    process: IProcess
 }
 
 export interface IGlobalOut extends IGlobalIn {
@@ -29,7 +31,7 @@ export interface IEvent {
     result?: any
 }
 
-export interface IGo {
+export interface IGo extends IProcess {
     // Required by Go
 
     /**
@@ -61,10 +63,7 @@ export interface IGo {
     exited: boolean
     timeOrigin: number
 
-    exit(code: number): void
-
     _resume(): void
-
 
     setInt64(addr: number, v: number): void
 
@@ -80,11 +79,6 @@ export interface IGo {
 
     loadString(addr: number): string
 
-    /// Process-like
-    /// move to process?
-    env: { [key: string]: string }
-    argv: string[]
-
     run(inst: IInstance): Promise<void>
 
     importObject: { go: IImportObjectGo }
@@ -96,10 +90,31 @@ export interface IGo {
  * TODO: move process stuff to process?
  */
 export class Go<G extends IGlobalIn> implements IGo {
-    #global: G
-    argv: string[]
-    env: { [key: string]: string } = {}
+    readonly #global: G
+    argv: string[] = ['js']
+    chdir(path: string): void { this.#global.process.chdir(path) }
+    cwd(): string { return this.#global.process.cwd() }
+    env: {[key: string]: string} = {}
 
+    exit(code: int) {
+        if (code !== 0) {
+            console.warn("exit code:", code);
+        }
+    }
+
+    geteuid(): int {return this.#global.process.geteuid()}
+    getegid(): int { return this.#global.process.getegid() }
+    getgroups(): int[] {return this.#global.process.getgroups()}
+    getgid(): int { return this.#global.process.getgid() }
+    getuid(): int { return this.#global.process.getuid() }
+    hrtime(time?: [number, number]): [number, number] {return this.#global.process.hrtime(time)}
+    pid: int
+    readonly platform: 'js'
+    ppid: int
+    stdin: IStreamReadable & { fd: 0 }
+    stdout: IStreamDuplex & { fd: 1 }
+    stderr: IStreamDuplex & { fd: 2 }
+    umask(mask: int): int {return this.#global.process.umask(mask)}
 
     _resolveExitPromise: any = undefined
     _exitPromise = new Promise((resolve) => {
@@ -127,8 +142,13 @@ export class Go<G extends IGlobalIn> implements IGo {
     constructor(g: G) {
         this.#global = g
 
-        this.argv = ["js"];
-        this.env = {};
+        this.pid = g.process.pid
+        this.platform = g.process.platform
+        this.ppid = g.process.ppid
+        this.stdin = g.process.stdin
+        this.stdout = g.process.stdout
+        this.stderr = g.process.stderr
+
         this._exitPromise = new Promise((resolve) => {
             this._resolveExitPromise = resolve;
         });
@@ -164,12 +184,6 @@ export class Go<G extends IGlobalIn> implements IGo {
         ]);
         this._idPool = []
         this.exited = false
-    }
-
-    exit(code: number) {
-        if (code !== 0) {
-            console.warn("exit code:", code);
-        }
     }
 
     setInt64(addr: number, v: number) {
@@ -343,7 +357,6 @@ export class Go<G extends IGlobalIn> implements IGo {
         };
     }
 }
-
 
 export default function install<T extends IGlobalIn>(g: T): T & IGlobalOut {
     const g_ = g as T & IGlobalOut

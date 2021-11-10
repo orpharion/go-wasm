@@ -1,7 +1,7 @@
-import {ApiError} from "browserfs/src/core/api_error";
-import Stats from "browserfs/src/core/node_fs_stats";
-import {ActionType} from "browserfs/src/core/file_flag";
+import {ApiError} from "browserfs/dist/node/core/api_error"
+import Stats from "browserfs/dist/node/core/node_fs_stats";
 import IBuffer from './buffer'
+import {FileFlag} from "browserfs/dist/node/core/file_flag";
 /**
  * Interfaces copied from BrowserFS, because dist and src differ and src doesn't compile against the ts config.
  */
@@ -188,26 +188,24 @@ export interface FileSystem extends FileSystemBase {
  * https://github.com/jvilk/BrowserFS/blob/master/src/core/file_flag.ts
  * See also browserfs/dist/node/core/file_flag.d.ts once built.
  */
-export interface FileFlag {
-    getFileFlag(flagStr: string): FileFlag
-
-    constructor(flagStr: string): FileFlag
-
-    getFlagString(): string
-
-    isReadable(): boolean
-
-    isWriteable(): boolean
-
-    isTruncating(): boolean
-
-    isAppendable(): boolean
-
-    isSynchronous(): boolean
-
-    isExclusive(): boolean
-
-    pathExistsAction(): ActionType
-
-    pathNotExistsAction(): ActionType
-}
+// export interface FileFlag {
+//     getFileFlag(flagStr: string): FileFlag
+//
+//     getFlagString(): string
+//
+//     isReadable(): boolean
+//
+//     isWriteable(): boolean
+//
+//     isTruncating(): boolean
+//
+//     isAppendable(): boolean
+//
+//     isSynchronous(): boolean
+//
+//     isExclusive(): boolean
+//
+//     pathExistsAction(): ActionType
+//
+//     pathNotExistsAction(): ActionType
+// }

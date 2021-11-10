@@ -39,7 +39,7 @@ function normalizeString(path: string, allowAboveRoot: boolean, separator: strin
     let code = 0;
     for (let i = 0; i <= path.length; ++i) {
         if (i < path.length)
-            code = path.charCodeAt( i);
+            code = path.charCodeAt(i);
         else if (isPathSeparator(code))
             break;
         else
@@ -50,15 +50,15 @@ function normalizeString(path: string, allowAboveRoot: boolean, separator: strin
                 // NOOP
             } else if (dots === 2) {
                 if (res.length < 2 || lastSegmentLength !== 2 ||
-                    res.charCodeAt( res.length - 1) !== CHAR_DOT ||
-                    res.charCodeAt( res.length - 2) !== CHAR_DOT) {
+                    res.charCodeAt(res.length - 1) !== CHAR_DOT ||
+                    res.charCodeAt(res.length - 2) !== CHAR_DOT) {
                     if (res.length > 2) {
                         const lastSlashIndex = res.lastIndexOf(separator);
                         if (lastSlashIndex === -1) {
                             res = '';
                             lastSegmentLength = 0;
                         } else {
-                            res = res.slice( 0, lastSlashIndex);
+                            res = res.slice(0, lastSlashIndex);
                             lastSegmentLength =
                                 res.length - 1 - res.lastIndexOf(separator);
                         }
@@ -79,9 +79,9 @@ function normalizeString(path: string, allowAboveRoot: boolean, separator: strin
                 }
             } else {
                 if (res.length > 0)
-                    res += `${separator}${path.slice( lastSlash + 1, i)}`;
+                    res += `${separator}${path.slice(lastSlash + 1, i)}`;
                 else
-                    res = path.slice( lastSlash + 1, i);
+                    res = path.slice(lastSlash + 1, i);
                 lastSegmentLength = i - lastSlash - 1;
             }
             lastSlash = i;
@@ -95,13 +95,24 @@ function normalizeString(path: string, allowAboveRoot: boolean, separator: strin
     return res;
 }
 
-
 export interface IGlobalIn {
     process: IProcess
 }
 
+export interface IPath {
+    basename(path: string, ext?: string): string
+    dirname(path: string): string
+    extname(path: string): string
+    isAbsolute(path: string): boolean
+    join(...args: string[]): string
+    normalize(path: string): string
+    parse(path: string): { root: string, dir: string, base: string, ext: string, name: string }
+    relative(from: string, to: string): string
+    resolve(...args: string[]): string
 
-export class Path {
+}
+
+export class Path implements IPath {
     static readonly sep: '/'
     static readonly delimiter: ':'
     #global: IGlobalIn
@@ -180,7 +191,6 @@ export class Path {
             path.charCodeAt(0) === CHAR_FORWARD_SLASH;
     }
 
-
     /**
      * @param {...string} args
      * @returns {string}
@@ -202,7 +212,6 @@ export class Path {
             return '.';
         return this.normalize(joined);
     }
-
 
     /**
      * @param {string} from
@@ -288,7 +297,6 @@ export class Path {
         return path;
     }
 
-
     /**
      * @param {string} path
      * @returns {string}
@@ -317,7 +325,6 @@ export class Path {
             return '//';
         return path.slice(0, end);
     }
-
 
     /**
      * @param {string} path
@@ -449,7 +456,6 @@ export class Path {
         }
         return path.slice(startDot, end);
     }
-
 
     // format: FunctionPrototypeBind(_format, null, ),
     format(pathObject: {

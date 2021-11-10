@@ -1,4 +1,4 @@
-import {File, FileFlag as IFileFlag, FileSystem as bFS} from './browserfs/interfaces'
+import {File, FileSystem as bFS} from './browserfs/interfaces'
 import bStats from 'browserfs/dist/node/core/node_fs_stats'
 import {
     Callback,
@@ -70,7 +70,6 @@ class StatDirDummy implements bStats, Stat {
         this.ctimeMs = this.ctime.getTime()
         this.birthtimeMs = this.ctime.getTime()
     }
-
 
     isFile() {
         return false
@@ -203,7 +202,6 @@ export class FileSystem implements IFileSystem {
         return flagStr
     }
 
-
     // readFile(filename: string, cb: (e: ErrorPossible, rv?: Buffer) => any) {
     //     this.#wrapped.readFile(filename, null, wcb(cb))
     // }
@@ -221,6 +219,7 @@ export class FileSystem implements IFileSystem {
             } else {
                 // browser buffer has no copy method.
                 // todo see if this works!!!!!
+                console.log("write", f)
                 return f.write(this.#global.Buffer.from(buf), offset, length, position, wcb(cb))
             }
         }
@@ -356,7 +355,7 @@ export class FileSystem implements IFileSystem {
                 if (e || s?.isFile()) {
                     // try send open a fileFlag instead, expecting it to be?
 
-                    this.#wrapped.open(path, fileFlag as unknown as IFileFlag, mode,
+                    this.#wrapped.open(path, fileFlag, mode,
                         (e, f?) => {
                             if (f && !e) {
                                 const fd = this._fdNext += 1
@@ -394,6 +393,7 @@ export class FileSystem implements IFileSystem {
                 if (!f) {
                     cb(e)
                 } else {
+                    console.log("read", f)
                     f.read(this.#global.Buffer.from(buf), offset, length, position, (e, n, b) => {
                         // this is extremely odd. The data isn't transferred to the provided buffer.
                         if (b) {

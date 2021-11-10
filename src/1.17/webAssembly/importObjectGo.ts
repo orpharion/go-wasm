@@ -80,18 +80,19 @@ export default function newImportObject<G extends IGlobalIn>(
             "runtime.wasmExit"(sp: SP) {
                 sp >>>= 0;
                 const code = global.go.mem.getInt32(sp + 8, true);
+                console.log("exiting with code", code)
                 global.go.exited = true;
                 global.go._inst = {} as IInstance;
                 global.go._values = [];
                 global.go._goRefCounts = [];
                 global.go._ids = new Map([]);
                 global.go._idPool = [];
-                // // clear remaining timeouts. One always lingers, it seems.
-                // console.log("scheduledTimeouts remaining", (go_ as any)._scheduledTimeouts.length);
-                // (go_ as any)._scheduledTimeouts.forEach((v: number, k: any) => {
-                //     clearTimeout(v as number);
-                //     (go_ as any)._scheduledTimeouts.delete(k)
-                // })
+                // clear remaining timeouts. One always lingers, it seems.
+                console.log("scheduledTimeouts remaining", (global.go as any)._scheduledTimeouts.length);
+                (global.go as any)._scheduledTimeouts.forEach((v: number, k: any) => {
+                    clearTimeout(v as number);
+                    (global.go as any)._scheduledTimeouts.delete(k)
+                })
                 global.go.exit(code);
             },
 

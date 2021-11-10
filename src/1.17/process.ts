@@ -25,7 +25,6 @@ export interface IGlobalIn {
 
 export type IGlobalOut = IGlobalIn & { process: IProcess }
 
-
 export interface IStreamWritable {
     write(chunk: Uint8Array, encoding?: string | null, callback?: (e?: Error | null | undefined) => void): boolean
 }
@@ -110,7 +109,6 @@ export class StdIn extends StreamReadable {
     }
 }
 
-
 export class StdOut extends StreamDuplex {
     fd: 1 = 1
     #global: IGlobalIn
@@ -145,34 +143,60 @@ export class StdErr extends StreamDuplex {
     }
 }
 
+/**
+ * See https://nodejs.org/api/process.html
+ */
 export interface IProcess {
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L292
-     */
-    getuid(): int
+    argv: string[]
 
     /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L296
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L320
      */
-    getgid(): int
+    // covers Fchdir, Getwd as well.
+    chdir(path: string): void
 
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L313
+     */
+    cwd(): string
+
+    env: { [key: string]: string }
+
+    exit(code?: int): void
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L304
+     */
+    getegid(): int
     /**
      * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L300
      */
     geteuid(): int
 
     /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L304
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L296
      */
-    getegid(): number
-
+    getgid(): int
     /**
      * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L308
      */
     getgroups(): int[]
 
-    pid: number
-    ppid: number
+    /**
+     * See https://github.com/golang/go/blob/go1.17/src/syscall/syscall_js.go#L292
+     */
+    getuid(): int
+
+    /**
+     * Required for global.performance.
+     * See
+     *     https://github.com/golang/go/blob/go1.17/misc/wasm/wasm_exec.js#L121
+     *     https://github.com/DefinitelyTyped/DefinitelyTyped/blob/master/types/node/process.d.ts#L114
+     */
+    hrtime(time?: [number, number]): [number, number]
+
+    readonly pid: int
+    readonly platform: 'js'
+    readonly ppid: int
 
     // std streams not implemented in go, but added here.
     stdin: IStreamReadable & { fd: 0 }
@@ -184,24 +208,6 @@ export interface IProcess {
      */
     umask(mask: int): int
 
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L313
-     */
-    cwd(): string
-
-    /**
-     * See https://github.com/golang/go/blob/go1.17/src/syscall/fs_js.go#L320
-     */
-    // covers Fchdir, Getwd as well.
-    chdir(path: string): void
-
-    /**
-     * Required for global.performance.
-     * See
-     *     https://github.com/golang/go/blob/go1.17/misc/wasm/wasm_exec.js#L121
-     *     https://github.com/DefinitelyTyped/DefinitelyTyped/blob/master/types/node/process.d.ts#L114
-     */
-    hrtime(time?: [number, number]): [number, number]
 }
 
 // todo integrate with filesystem to check #cwd exists.
@@ -209,9 +215,24 @@ export class Process<G extends IGlobalIn> implements IProcess {
     #global: G
     #cwd: string
     #hrtime: Ihrtime
+    argv: string[] = []
+    chdir(path: string) { this.#cwd = path }
+    cwd(): string { return this.#cwd }
+    env: { [key: string]: string } = {}
+    exit(code?: int): void {throw enosys()}
+    getuid() { return -1 }
+    getgid() { return -1 }
+    geteuid() { return -1 }
+    getegid() { return -1 }
+    getgroups(): int[] { throw enosys() }
+    hrtime() { return this.#hrtime() }
+    pid: int = -1
+    platform: 'js' = 'js'
+    ppid: int = -1
     stdin: IStreamReadable & { fd: 0 }
     stdout: IStreamDuplex & { fd: 1 }
     stderr: IStreamDuplex & { fd: 2 }
+    umask(mask: int): int { throw enosys() }
 
     constructor(g: G, pipe: boolean = true, hrtime: Ihrtime) {
         this.#cwd = "/"
@@ -220,46 +241,6 @@ export class Process<G extends IGlobalIn> implements IProcess {
         this.stdin = new StdIn()
         this.stdout = new StdOut(g, pipe)
         this.stderr = new StdErr(g, pipe)
-    }
-
-    getuid() {
-        return -1
-    }
-
-    getgid() {
-        return -1
-    }
-
-    geteuid() {
-        return -1
-    }
-
-    getegid() {
-        return -1
-    }
-
-    getgroups(): int[] {
-        throw enosys()
-    }
-
-    pid: number = -1
-    ppid: number = -1
-
-    umask(mask: int): int {
-        throw enosys()
-    }
-
-    cwd(): string {
-        return this.#cwd
-    }
-
-    chdir(path: string) {
-        this.#cwd = path
-        // throw enosys()
-    }
-
-    hrtime() {
-        return this.#hrtime()
     }
 }
 
